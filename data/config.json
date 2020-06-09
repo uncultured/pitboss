@@ -1,0 +1,6 @@
+{
+  "logLevel": 0,
+  "wifiCountry": "US",
+  "ntpServer": "north-america.pool.ntp.org",
+  "thermocoupleReadInterval": 2000
+}
