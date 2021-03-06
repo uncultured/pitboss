@@ -4,7 +4,6 @@
 using namespace PitBoss;
 
 App* pitboss;
-
 void setup() {
   pitboss = new App();
   pitboss->setup();

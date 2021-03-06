@@ -30,6 +30,12 @@ std::vector<String> Config::fromJson(StaticJsonDocument<Config::CONFIG_FILE_MAX_
   if (json.containsKey(Config::jsonKeys::THERMOCOUPLE_READ_INTERVAL_MS)) {
     this->thermocoupleReadInterval = json[Config::jsonKeys::THERMOCOUPLE_READ_INTERVAL_MS].as<int>();
   }
+  if (json.containsKey(Config::jsonKeys::GMT_OFFSET)) {
+    this->gmtOffset = json[Config::jsonKeys::GMT_OFFSET].as<int>();
+  }
+  if (json.containsKey(Config::jsonKeys::DST_OFFSET)) {
+    this->dstOffset = json[Config::jsonKeys::DST_OFFSET].as<int>();
+  }
   return errors;
 }
 
@@ -51,6 +57,8 @@ StaticJsonDocument<Config::CONFIG_FILE_MAX_SIZE> Config::toJson() {
   json[Config::jsonKeys::LOG_LEVEL] = this->logLevel;
   json[Config::jsonKeys::WIFI_COUNTRY] = this->wifiCountry.cc;
   json[Config::jsonKeys::NTP_SERVER] = this->ntpServer;
+  json[Config::jsonKeys::GMT_OFFSET] = this->gmtOffset;
+  json[Config::jsonKeys::DST_OFFSET] = this->dstOffset;
   json[Config::jsonKeys::THERMOCOUPLE_READ_INTERVAL_MS] = this->thermocoupleReadInterval;
   return json;
 }

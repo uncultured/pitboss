@@ -7,20 +7,21 @@
 #include <PitBoss/Stateful.h>
 #include <FS.h>
 #include <Adafruit_MAX31855.h>
-#include <Wire.h> // Adafruit library refuses to compile without this
 #include <vector>
 #include <map>
 #include <functional>
 #include <ESPAsyncWebServer.h>
 #include <jled.h>
 #include <JC_Button_ESP.h>
-#include <time.h>
+#include <ctime>
 #include <ArduinoJson.h>
 #include <WiFiManager.h>
 #include <PitBoss/Process.h>
 #include <PitBoss/StatefulWiFi.h>
 #include "StatefulThermocouple.h"
 #include "Logger.h"
+#include "StatefulDisplay.h"
+#include "AsyncUDP.h"
 
 namespace PitBoss {
 
@@ -45,13 +46,17 @@ class App :
  protected:
   static const int BAUD_RATE = 115200;
 
-  static const int STATUS_LED_RED = 25;
-  static const int STATUS_LED_GREEN = 26;
-  static const int STATUS_LED_BLUE = 27;
+  static const int SCREEN_TIMEOUT_MS = 30 * 1000;
+  static const int DISPLAY_WIDTH = 128;
+  static const int DISPLAY_HEIGHT = 32;
+  static const int DISPLAY_I2C_ADDRESS = 0x3C;
 
-  static const int RESET_BUTTON = 33;
+  static const int SHORT_PRESS_MS = 2 * 1000;
+  static const int LONG_PRESS_MS = 10 * 1000;
+  static const gpio_num_t POWER_BUTTON_PIN = GPIO_NUM_0;
+  static const gpio_num_t POWER_LED_PIN = GPIO_NUM_4;
 
-  static const int THERMOCOUPLE_CS = 5;
+  static const gpio_num_t THERMOCOUPLE_CS_PIN = GPIO_NUM_5;
   static const int THERMOCOUPLE_STARTUP_DELAY_MS = 100;
 
   constexpr static const char* SPLASH_PATH = "/splash.txt";
@@ -60,35 +65,34 @@ class App :
 
   Config _config;
   StatefulWiFi _wifi;
-  StatefulLED _statusLED;
   StatefulThermocouple _thermocouple;
   AsyncWebServer _webServer;
-  Button _resetButton;
+  StatefulDisplay _display;
+  Button _button;
+  JLed _powerLED;
+  boolean _sleepEnable = false;
+  AsyncUDP _udp;
  public:
-  constexpr static const char * TIME_FORMAT_ISO_8601 = "%Y-%m-%dT%H:%M:%SZ";
-  static String formatDateTime(tm *time, const char * format = TIME_FORMAT_ISO_8601);
-
-  static double celsiusToFarenheit(double celsius);
-
-  virtual void process();
-  virtual void setup();
+  void process() override;
+  void setup() override;
 
   App() :
     Logger(&Log),
     _config(),
     _wifi(&Log, _config.logLevel > LOG_LEVEL_SILENT, _config.wifiCountry, "pitboss-"),
-    _statusLED(STATUS_LED_RED, STATUS_LED_GREEN, STATUS_LED_BLUE),
-    _thermocouple(&Log, THERMOCOUPLE_STARTUP_DELAY_MS, _config.thermocoupleReadInterval, THERMOCOUPLE_CS),
+    _thermocouple(&Log, THERMOCOUPLE_STARTUP_DELAY_MS, _config.thermocoupleReadInterval, THERMOCOUPLE_CS_PIN),
     _webServer(SERVER_PORT),
-    _resetButton(RESET_BUTTON)
+    _display(DISPLAY_WIDTH, DISPLAY_HEIGHT, &Wire, DISPLAY_I2C_ADDRESS, SCREEN_TIMEOUT_MS),
+    _button(POWER_BUTTON_PIN),
+    _powerLED(POWER_LED_PIN)
   {}
 
  protected:
   bool initSPIFFS();
   static void splashScreen();
-  void initStatusLED();
   void initLog();
   bool initConfig();
+  void initButton();
   void initWebServer();
   void initThermocouple();
   void initNtp();

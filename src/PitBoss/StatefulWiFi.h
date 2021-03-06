@@ -48,8 +48,12 @@ class StatefulWiFi :
     this->_wifiManager.setDebugOutput(this->_debug);
     this->_wifiManager.setCountry(this->_wifiCountry.cc);
     this->_wifiManager.setConfigPortalBlocking(false);
+    if (this->_wifiManager.getWiFiIsSaved()) {
+      this->setState(StatefulWiFiStates::State::DISCONNECTED);
+    } else {
+      this->setState(StatefulWiFiStates::State::PROVISIONING);
+    }
     this->_wifiManager.autoConnect((String(F("pitboss-")) + String(WIFI_getChipId(), HEX)).c_str());
-    this->setState(StatefulWiFiStates::State::PROVISIONING);
   }
 
   virtual void process() {

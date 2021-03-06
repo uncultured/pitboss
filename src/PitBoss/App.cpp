@@ -1,11 +1,13 @@
 #include <SPIFFS.h>
 #include <PitBoss/App.h>
+#include <PitBoss/TimeHelper.h>
+#include <PitBoss/TemperatureHelper.h>
 
 namespace PitBoss {
 
 void App::setup() {
   Serial.begin(App::BAUD_RATE);
-  this->initStatusLED();
+  this->_display.setup();
   this->initLog();
   this->setState(ApplicationStates::State::BOOTING);
   if (!this->initSPIFFS()) {
@@ -18,33 +20,11 @@ void App::setup() {
     this->setState(ApplicationStates::State::FATAL_ERROR);
     return;
   }
+  this->initButton();
   this->initWebServer();
   this->initNtp();
   this->initWifi();
   this->initThermocouple();
-  this->_resetButton.begin();
-}
-
-void App::initStatusLED() {
-  this->onState(ApplicationStates::State::BOOTING, [this](){
-    this->_statusLED.waiting();
-  });
-  this->onState(ApplicationStates::State::FATAL_ERROR, [this](){
-    this->_statusLED.error();
-  });
-  this->onState(ApplicationStates::State::PROVISIONING, [this](){
-    this->_statusLED.waiting();
-  });
-  this->onState(ApplicationStates::State::DISCONNECTED, [this](){
-    this->_statusLED.waiting();
-  });
-  this->onState(ApplicationStates::State::READY, [this](){
-    this->_statusLED.ready();
-  });
-  this->onState(ApplicationStates::State::THERMOCOUPLE_ERROR, [this](){
-    this->_statusLED.error();
-  });
-  this->_statusLED.setup();
 }
 
 void App::initLog() {
@@ -93,6 +73,21 @@ bool App::initConfig() {
   return true;
 }
 
+void App::initButton() {
+  this->_button.begin();
+  this->_display.onState(StatefulDisplayStates::State::ON, [this](){
+    this->_powerLED.Stop();
+  });
+  this->_display.onState(StatefulDisplayStates::State::OFF, [this](){
+    this->_powerLED
+      .Reset()
+      .Breathe(1000)
+      .Forever()
+      .DelayAfter(5000);
+  });
+  esp_sleep_enable_ext0_wakeup(App::POWER_BUTTON_PIN,0);
+}
+
 void App::initWebServer() {
   this->_webServer.onNotFound([](AsyncWebServerRequest *request){
     Log.notice("404");
@@ -101,22 +96,17 @@ void App::initWebServer() {
     request->redirect("/temperature");
   });
   this->_webServer.on("/temperature", HTTP_GET, [this](AsyncWebServerRequest *request){
-    tm time;
-    if (!getLocalTime(&time)) {
-      request->send(500);
-      return;
-    }
-    double coldJunction;
-    double hotJunction;
+    double coldJunction = 0;
+    double hotJunction = 0;
     if (!this->_thermocouple.readThermocouple(coldJunction, hotJunction)) {
       request->send(500);
       return;
     }
     AsyncResponseStream *response = request->beginResponseStream("application/json");
     StaticJsonDocument<256> json;
-    json["time"] = App::formatDateTime(&time);
-    json["coldJunction"] = App::celsiusToFarenheit(coldJunction);
-    json["hotJunction"] = App::celsiusToFarenheit(hotJunction);
+    json["time"] = getTime();
+    json["coldJunction"] = celsiusToFarenheit(coldJunction);
+    json["hotJunction"] = celsiusToFarenheit(hotJunction);
     auto debug = json.createNestedObject("debug");
     debug["heap"] = ESP.getFreeHeap();
     debug["rssi"] = this->_wifi.getSignalStrength();
@@ -159,25 +149,35 @@ void App::initWebServer() {
 void App::initNtp() {
   this->onState(ApplicationStates::State::READY, [this](){
     if (!this->_config.ntpServer.equals(Config::DEFAULT_NTP_SERVER)) {
-      configTime(0, 0, this->_config.ntpServer.c_str(), Config::DEFAULT_NTP_SERVER, WiFi.gatewayIP().toString().c_str());
+      configTime(this->_config.gmtOffset, this->_config.dstOffset, this->_config.ntpServer.c_str(), Config::DEFAULT_NTP_SERVER, WiFi.gatewayIP().toString().c_str());
     } else {
-      configTime(0, 0, Config::DEFAULT_NTP_SERVER, WiFi.gatewayIP().toString().c_str());
+      configTime(this->_config.gmtOffset, this->_config.dstOffset, Config::DEFAULT_NTP_SERVER, WiFi.gatewayIP().toString().c_str());
     }
-    tm time;
-    getLocalTime(&time);
-    this->_log->notice(F("Got time: %s"), App::formatDateTime(&time).c_str());
+    this->_log->notice(F("Got time: %s"), getTime().c_str());
+    this->_display.startTime();
   });
 }
 
 void App::initWifi() {
   this->_wifi.onState(StatefulWiFiStates::State::CONNECTED, [this](){
     this->setState(ApplicationStates::State::READY);
+    this->_udp.connect(WiFi.localIP(), 8888);
+    this->_display.updateWiFi(StatefulWiFiStates::State::CONNECTED,
+                              WiFi.localIP(),
+                              this->_wifi.getSSID(),
+                              this->_wifi.getSignalStrength());
   });
   this->_wifi.onState(StatefulWiFiStates::State::DISCONNECTED, [this](){
     this->setState(ApplicationStates::State::DISCONNECTED);
+    this->_display.updateWiFi(StatefulWiFiStates::State::DISCONNECTED);
+  });
+  this->_wifi.onState(StatefulWiFiStates::State::PROVISIONING, [this](){
+    this->setState(ApplicationStates::State::PROVISIONING);
+    this->_display.updateWiFi(StatefulWiFiStates::State::PROVISIONING);
   });
   this->_wifi.onState(StatefulWiFiStates::State::ERROR, [this](){
     this->setState(ApplicationStates::State::FATAL_ERROR);
+    this->_display.updateWiFi(StatefulWiFiStates::State::ERROR);
   });
   this->_wifi.setup();
 }
@@ -192,12 +192,9 @@ void App::initThermocouple() {
   this->_thermocouple.onState(StatefulThermocoupleStates::State::ERROR, [this](){
     this->_log->notice(F("Thermocouple has been disconnected. Will continue polling for reconnection."));
     this->setState(ApplicationStates::State::THERMOCOUPLE_ERROR);
+    this->_display.updateThermocouple(StatefulThermocoupleStates::State::ERROR);
   });
   this->_thermocouple.setup();
-}
-
-double App::celsiusToFarenheit(double celsius) {
-  return (celsius * 9.0) / 5.0 + 32;
 }
 
 void App::splashScreen() {
@@ -212,24 +209,52 @@ void App::splashScreen() {
 }
 
 void App::process() {
-  this->_statusLED.process();
   if (this->_state == ApplicationStates::State::FATAL_ERROR) {
     return;
   }
+  this->_powerLED.Update();
   this->_thermocouple.process();
   this->_wifi.process();
-  this->_resetButton.read();
-  if (this->_resetButton.pressedFor(3000)) {
-    this->_log->notice(F("User has pressed the reset button!"));
+  if (this->_wifi.getState() == StatefulWiFiStates::State::CONNECTED) {
+    this->_display.updateWiFi(
+      StatefulWiFiStates::State::CONNECTED,
+      WiFi.localIP(),
+      this->_wifi.getSSID(),
+      this->_wifi.getSignalStrength()
+    );
+    this->_udp.broadcast("wazzap");
+  }
+  if (this->_thermocouple.getState() == StatefulThermocoupleStates::State::READY) {
+    double coldJunction;
+    double hotJunction;
+    this->_thermocouple.getTemperatures(coldJunction, hotJunction);
+    this->_display.updateThermocouple(
+      StatefulThermocoupleStates::State::READY,
+      coldJunction,
+      hotJunction
+    );
+  }
+  this->_display.process();
+  this->_button.read();
+  if (this->_button.isPressed()) {
+    if (this->_display.getState() == StatefulDisplayStates::State::OFF) {
+      this->_display.wakeup();
+    }
+  }
+  if (this->_button.pressedFor(App::SHORT_PRESS_MS)) {
+    this->_sleepEnable = true;
+  }
+  if (this->_sleepEnable && this->_button.isReleased()) {
+    this->_sleepEnable = false;
+    this->_log->notice(F("Going to sleep."));
+    this->_display.sleep();
+    esp_deep_sleep_start();
+  }
+  if (this->_button.pressedFor(App::LONG_PRESS_MS)) {
+    this->_log->notice(F("Resetting."));
     this->_wifi.forgetSSID();
     ESP.restart();
   }
-}
-
-String App::formatDateTime(tm *time, const char *format) {
-  char buffer[64];
-  strftime(buffer, sizeof(buffer), format, time);
-  return buffer;
 }
 
 }

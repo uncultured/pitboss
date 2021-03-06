@@ -2,5 +2,7 @@
   "logLevel": 0,
   "wifiCountry": "US",
   "ntpServer": "north-america.pool.ntp.org",
+  "gmtOffset": -18000,
+  "dstOffset": 3600,
   "thermocoupleReadInterval": 2000
 }
